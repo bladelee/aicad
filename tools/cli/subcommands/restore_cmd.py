@@ -6,7 +6,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-from .._argparse_common import print_result_json, fail
+from _argparse_common import print_result_json, fail
 
 
 # 让老 restore_from_bak.py 可 import（即使 core 包取不到也兜底）

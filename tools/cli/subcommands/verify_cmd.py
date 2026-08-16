@@ -5,7 +5,7 @@
 from __future__ import annotations
 import argparse
 from pathlib import Path
-from .._argparse_common import print_result_json, fail
+from _argparse_common import print_result_json, fail
 
 
 def add_parser(sub: argparse._SubParsersAction):

@@ -6,7 +6,7 @@
 ## 目录
 
 - [1. TL;DR — brew 坏了的 30 秒诊断法](#1-tldr--brew-坏了的-30-秒诊断法)
-- [2. 本次修复实录（4 个叠加根因）](#2-本次修复实录4-个叠加根因)
+- [2. 本次修复实录（5 个叠加根因）](#2-本次修复实录5-个叠加根因)
 - [3. 常见错误 & 速查表](#3-常见错误--速查表)
 - [4. 关键路径与目录](#4-关键路径与目录)
 - [5. brew 4.x API mode 必知](#5-brew-4x-api-mode-必知)
@@ -33,9 +33,9 @@ brew doctor 2>&1 | head -20    # 4. 看具体报错对号入座第 3 节
 
 ---
 
-## 2. 本次修复实录（4 个叠加根因）
+## 2. 本次修复实录（5 个叠加根因）
 
-按发现顺序记录，每个坑都标注**症状**、**根因**、**修复**，便于下次直接对号入座。
+按发现顺序记录，每个坑都标注**症状**、**根因**、**修复**，便于下次直接对号入座。（#1–#4 为 2026-08-09，#5 为 2026-08-16 追加）
 
 ### 坑 #1：陈旧 `homebrew-core` tap（2019）用了淘汰的 DSL
 
@@ -130,6 +130,43 @@ ls /Library/Developer/CommandLineTools/usr/bin/git    # 应存在
 
 ---
 
+### 坑 #5：本地代理按 User-Agent 拦截 Homebrew 请求（2026-08-16 发现）
+
+**症状**
+```
+✘ JSON API packages.monterey.jws.json
+Error: curl: (22) The requested URL returned error: 403
+HTTP status: 000
+```
+`brew update` / `brew install` 全部网络失败，但浏览器访问 formulae.brew.sh 正常。
+
+**根因**：机器上跑着本地代理（Clash/Surge 等，`http_proxy=http://localhost:51716`、`all_proxy=socks5h://localhost:51717`），代理软件**按 User-Agent 拦截**了带 `Homebrew/6.0.17 ...` UA 的请求，CONNECT 隧道直接返回 403。
+
+**验证方法**（同 URL 换 UA 对比）：
+```bash
+URL="https://formulae.brew.sh/api/internal/packages.monterey.jws.json"
+curl -sS -o /dev/null -w '%{http_code}\n' "$URL"                                  # 普通UA → 200
+curl -sS -o /dev/null -w '%{http_code}\n' -A "Homebrew/6.0.17 (Macintosh; Intel Mac OS X 12.7.6) curl/8.7.1" "$URL"
+                                                                                   # brew UA → 403（代理拦的）
+env | grep -i proxy                                                                # 确认有本地代理
+```
+
+**修复（三选一）**：
+```bash
+# A. 让 brew 域名绕过代理（推荐，不影响其它软件走代理）
+export no_proxy="formulae.brew.sh,ghcr.io,github.com,objects.githubusercontent.com,*.r2.cloudflarestorage.com"
+export NO_PROXY="$no_proxy"
+# 写进 ~/.zshrc 永久生效
+
+# B. 在代理软件里给 brew UA / 这些域名加放行规则
+
+# C. 临时关代理跑 brew（不推荐，国内直连 ghcr.io 慢）
+```
+
+⚠️ 注意：改用直连后这台老机器下载 15MB 的 API JSON 可能要几分钟（7200rpm HDD + 海外 CDN），属正常慢，不是卡死。
+
+---
+
 ## 3. 常见错误 & 速查表
 
 | 错误信息 | 根因 | 修复 |
@@ -142,6 +179,9 @@ ls /Library/Developer/CommandLineTools/usr/bin/git    # 应存在
 | `xcrun: error: invalid active developer path` | `xcode-select` 指向的目录不存在（如删了 Xcode 没切指向） | `sudo xcode-select --switch /Library/Developer/CommandLineTools` |
 | `xcode-select: error: no developer tools were found at '...', and no install could be requested (perhaps no UI is present)` | 在 VS Code 终端跑 `xcode-select --install` 没法弹 GUI | 改到 Terminal.app 跑 |
 | `Errno::EPERM ... ~/Library/Caches/Homebrew/bootsnap` | VS Code 沙箱拦截写 ~/Library/Caches | 见第 7 节 |
+| `curl: (22) ... returned error: 403` 但浏览器访问正常 | 本地代理按 UA 拦截 Homebrew 请求 | 见坑 #5，设 no_proxy 绕过 |
+| `/usr/local/Cellar is not writable`（但 `ls -l` 全归自己） | VS Code 沙箱拦工作区外写入，非真权限问题 | Terminal.app 里跑，或工具调用申请沙箱外执行 |
+| Terminal.app 一启动就 SIGSEGV（tty-io 线程 objc_release） | `~/Library/Saved Application State/com.apple.Terminal.savedState` 损坏 | `mv` 走该目录即修复（详见第 11 节） |
 | `git: error: unable to locate xcodebuild` | 系统 git 找不 Xcode（已删或损坏） | 装 CLT，或用第 8 节的备选 git |
 | `/usr/local/Cellar is not writable` | 目录所有权不对 | `sudo chown -R $(whoami) /usr/local/Cellar` |
 | `Warning: You are using macOS 12. We (and Apple) do not provide support` | macOS 12 不在 brew Tier 1 | 无害警告，可忽略；功能正常 |
@@ -377,3 +417,26 @@ rm -rf ~/.homebrew-cache
 | 00:50 | 删除损坏的 Xcode 7.3.1（7.4G） | "Xcode too outdated" 消失，但缺 CLT |
 | 01:00 | 用 conda 装 git 作备选 | 验证 origin remote 都存在，确认根因在系统 git |
 | 01:28 | 用户在 Terminal.app 装 CLT（`xcode-select --install`） | git 恢复，brew install hello 成功 |
+| 08-16 | 发现代理按 UA 拦 brew（403），设 no_proxy 绕过 | brew update 恢复 |
+| 08-16 | Terminal.app 启动崩溃（savedState 损坏，与 brew 修复无关），移走 savedState | Terminal 恢复 |
+
+---
+
+## 11. 附：Terminal.app 启动崩溃修复（2026-08-16，与 brew 无关但同日处理）
+
+**症状**：Terminal 一启动 0.7 秒内 SIGSEGV。崩溃栈特征：
+- 崩溃线程 `com.apple.terminal.tty-io`，`objc_release` 访问野指针（如 `0x90000000020`）
+- 主线程正在 `-[NSApplication restoreWindowWithIdentifier:state:]`（恢复窗口状态）
+
+**根因**：`~/Library/Saved Application State/com.apple.Terminal.savedState/` 里的会话快照（`data.data` 含 TTY 历史）损坏。启动→恢复→崩溃→（崩溃时又写坏状态）→ 循环崩。判断依据：`restorecount.plist` 时间戳是崩溃当刻、`data.data` 是几天前的。
+
+**与 brew 修复/删 Xcode 无关**：Terminal.app 在 `/System/Applications` 受 SIP 保护，崩溃栈纯内存管理问题、无 git/CLT 痕迹。
+
+**修复**（移走而非删除，可回滚）：
+```bash
+mv ~/Library/Saved\ Application\ State/com.apple.Terminal.savedState ~/Desktop/Terminal.savedState.broken-backup-$(date +%Y%m%d)
+open -a Terminal   # 应正常启动开新窗口
+```
+确认正常后，桌面那个备份目录可删。
+
+**预防**：无需处理；窗口状态损坏是小概率事件，遇到了按上面一条命令即可。
