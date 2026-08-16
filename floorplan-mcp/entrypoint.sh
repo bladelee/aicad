@@ -12,12 +12,16 @@
 set -e
 
 # ── C4-δ：透传 CLI 子命令 ──
-# 支持三种形态：
-#   docker run floorplan-mcp move-wall ...          （CLI 子命令，推荐）
-#   docker run floorplan-mcp floorplan move-wall ... （容错，重复前缀自动去掉）
-#   docker run floorplan-mcp /opt/FreeCAD/usr/bin/python -m pytest ...
-#                                                    （绝对路径 = 任意命令直 exec）
-# 无参数 / serve → 保持原 MCP 常驻行为
+# 支持形态：
+#   docker run floorplan-mcp move-wall ...          （CLI 子命令）
+#   docker run floorplan-mcp floorplan move-wall ... （容错去重）
+#   docker run floorplan-mcp /abs/path cmd ...       （绝对路径原样 exec）
+#   docker run floorplan-mcp serve                   （stdio 常驻，Goose docker exec 用）
+#   docker run floorplan-mcp serve-http [-e FLOORPLAN_AUTH_TOKEN=...] （v0.3 服务器形态）
+# 无参数 → 保持 MCP 常驻（兼容 docker compose up）
+if [ "$1" = "serve-http" ]; then
+    exec /opt/FreeCAD/usr/bin/python /opt/floorplan/mcp_server_http_authed.py
+fi
 if [ "$#" -gt 0 ] && [ "$1" != "serve" ]; then
     case "$1" in
         /*|./*) exec "$@" ;;                      # 绝对/相对路径：原样 exec

@@ -15,7 +15,24 @@ transaction + .bak。详见 backends/_safety.py。
 """
 
 from __future__ import annotations
-from . import get_backend
+
+# v0.3 修复：freecad-ai user_tools 是"独立文件加载"（无父包），相对导入必崩。
+# 回退方案按文件位置加载本目录的 __init__.py 拿 get_backend。
+# ⚠️ 绝不能 `from tools import ...`：会与镜像里另一个同名包 /opt/aicad/tools
+# 冲突（sys.modules 缓存污染，导致 mcp_renovation_tools 的 tools.core 解析错+静默丢工具）。
+try:
+    from . import get_backend  # type: ignore
+except ImportError:
+    import importlib.util as _iu
+    import os as _os
+    # ⚠️ 用 realpath 解 symlink：本文件可能经 USER_TOOLS_DIR 的软链被加载，
+    # 直接 dirname 会指向链接目录（那里没有 __init__.py，FileNotFoundError）。
+    _src = _os.path.realpath(_os.path.abspath(__file__))
+    _init = _os.path.join(_os.path.dirname(_src), "__init__.py")
+    _spec = _iu.spec_from_file_location("_floorplan_pkg_init", _init)
+    _pkg = _iu.module_from_spec(_spec)  # type: ignore[arg-type]
+    _spec.loader.exec_module(_pkg)  # type: ignore[union-attr]
+    get_backend = _pkg.get_backend
 
 
 def read_floorplan(path: str) -> dict:

@@ -17,28 +17,54 @@ freecad-ai user_tools 约束（自动 AST 发现）：
 """
 from __future__ import annotations
 
+import importlib.util
 import os
 import sys
 from pathlib import Path
 
 # 容器内 core/CLI 层在 /opt/aicad（见 Dockerfile C4-δ COPY）；
-# 本地仓库直跑时在仓库根。两处都试探，找到为止。
-for _root in (os.environ.get("AICAD_ROOT", "/opt/aicad"), str(Path(__file__).resolve().parents[2])):
-    if Path(_root).is_dir() and (_root not in sys.path):
-        sys.path.insert(0, _root)
+# 本地仓库直跑时在仓库根。
+# ⚠️ v0.3 关键教训：不能只 sys.path.insert("/opt/aicad") 然后 `from tools.core ...` ——
+# 镜像里还有另一个同名包 /opt/floorplan/tools（floorplan MCP 侧），sys.modules
+# 缓存谁先被 import 就定谁，交叉加载时 mcp_renovation_tools 会拿到错的 tools 包
+# 且异常被 freecad-ai loader 吞掉（工具静默丢失）。
+# 解法：用专用模块名 _aicad_core 直接按路径加载 /opt/aicad/tools/core/__init__.py，
+# 完全绕开顶层包名解析。
+_CORE_CANDIDATES = [
+    Path(os.environ.get("AICAD_ROOT", "/opt/aicad")) / "tools" / "core" / "__init__.py",
+    Path(__file__).resolve().parents[2] / "tools" / "core" / "__init__.py",  # 本地仓库直跑
+]
+_core = None
+for _c in _CORE_CANDIDATES:
+    if _c.exists():
+        _spec = importlib.util.spec_from_file_location("_aicad_core", _c)
+        _core = importlib.util.module_from_spec(_spec)  # type: ignore[arg-type]
+        # core 包内部有相对导入（from .move_wall import ...），需注册成包再 exec
+        _core.__path__ = [str(_c.parent)]  # type: ignore[attr-defined]
+        _core.__package__ = "_aicad_core"  # type: ignore[attr-defined]
+        sys.modules["_aicad_core"] = _core
+        _spec.loader.exec_module(_core)  # type: ignore[union-attr]
+        break
+assert _core is not None, f"aicad core 层未找到: {[str(c) for c in _CORE_CANDIDATES]}"
 
-from tools.core._stdio_guard import guard_stdout
+# 同一专用通道取 guard（不 from tools.core.xxx —— 同名包冲突教训见文件顶部注释）
+guard_stdout = _core._stdio_guard.guard_stdout if hasattr(_core, "_stdio_guard") else None
+if guard_stdout is None:
+    # core/__init__.py 未导出 _stdio_guard 时，按路径补加载
+    _g_path = Path(_core.__path__[0]) / "_stdio_guard.py"  # type: ignore[index]
+    _g_spec = importlib.util.spec_from_file_location("_aicad_core._stdio_guard", _g_path)
+    _g = importlib.util.module_from_spec(_g_spec)  # type: ignore[arg-type]
+    sys.modules.setdefault("_aicad_core", _core)
+    _g_spec.loader.exec_module(_g)  # type: ignore[union-attr]
+    guard_stdout = _g.guard_stdout
 
-# core 层 import 包在 guard 外（import 期老模块也可能 print）
-with guard_stdout():
-    from tools.core import (
-        move_wall as _move_wall_core,
-        move_wall_with_dim as _move_wall_dim_core,
-        move_wall_with_floor_ceil as _move_wall_fc_core,
-        apply_material_rename as _rename_core,
-        verify_rename as _verify_core,
-        probe_dimensions_near_wall as _probe_dims_core,
-    )
+# v0.3：以下函数也从 _core 专用通道拿（不 from tools.core —— 同名包冲突教训见文件顶部注释）
+_move_wall_core = _core.move_wall
+_move_wall_dim_core = _core.move_wall_with_dim
+_move_wall_fc_core = _core.move_wall_with_floor_ceil
+_rename_core = _core.apply_material_rename
+_verify_core = _core.verify_rename
+_probe_dims_core = _core.probe_dimensions_near_wall
 
 
 def move_wall(

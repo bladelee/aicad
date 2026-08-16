@@ -19,9 +19,6 @@ services:
     image: floorplan-mcp:latest
     container_name: floorplan-mcp
     restart: unless-stopped
-    # MVP stdio 模式不需要端口；streamable_http（Phase 1.5）需放开注释：
-    # ports:
-    #   - "3000:3000"
     volumes:
       # bind mount：用户 DWG ↔ 容器 /data 直接共享，免文件上传端点
       - "${HOME}/dwgs:/data"
@@ -31,3 +28,28 @@ services:
       FLOORPLAN_BACKEND: freecad   # freecad | ezdxf | ifc
       # ODA_FILE_CONVERTER: /opt/oda/ODAFileConverter   # 挂载 ODA 后启用
     mem_limit: 4g                  # 装修图大文件保险
+    # ── 形态 A（本机一体化，默认）──
+    # stdio 模式：Goose 通过 `docker exec -i floorplan-mcp python /opt/floorplan/mcp_server_stdio.py` 拉起
+    # （无 ports；command 保持默认即容器常驻）
+
+  # ── 形态 B（v0.3 服务器模式）── 启用：docker compose --profile server up -d
+  floorplan-server:
+    build:
+      context: ..
+      dockerfile: floorplan-mcp/Dockerfile
+    image: floorplan-mcp:latest
+    container_name: floorplan-server
+    restart: unless-stopped
+    profiles: ["server"]
+    command: ["serve-http"]
+    ports:
+      - "3000:3000"
+    volumes:
+      - "${HOME}/dwgs:/data"
+    environment:
+      FLOORPLAN_BACKEND: freecad
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: "3000"
+      # 必填！生成: openssl rand -hex 24（客户端 Goose 配同名 Bearer）
+      FLOORPLAN_AUTH_TOKEN: "${FLOORPLAN_AUTH_TOKEN:?请设置 FLOORPLAN_AUTH_TOKEN（openssl rand -hex 24）}"
+    mem_limit: 4g

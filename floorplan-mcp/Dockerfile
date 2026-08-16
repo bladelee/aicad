@@ -56,6 +56,7 @@ RUN mkdir -p /opt/freecad-ai \
 COPY floorplan-mcp/tools/ /opt/floorplan/tools/
 COPY floorplan-mcp/backends/ /opt/floorplan/backends/
 COPY floorplan-mcp/mcp_server_stdio.py /opt/floorplan/mcp_server_stdio.py
+COPY floorplan-mcp/mcp_server_http_authed.py /opt/floorplan/mcp_server_http_authed.py
 ENV FLOORPLAN_TOOLS_FILE=/opt/floorplan/tools/floorplan_tools.py
 ENV FLOORPLAN_BACKEND=${FLOORPLAN_BACKEND:-freecad}
 ENV PYTHONPATH="${PYTHONPATH}:/opt/floorplan:/opt/freecad-ai"

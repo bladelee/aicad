@@ -38,15 +38,31 @@ OUR_TOOL_FILES = [
 ]
 
 
+def _real_user_tools_dir() -> Path:
+    """从 freecad-ai config 读真实的 USER_TOOLS_DIR（单一事实源）。
+
+    v0.3 修复：此前硬编码 ~/.config/FreeCAD/FreeCADAI/tools，
+    但 freecad-ai 实际用 CONFIG_DIR/tools（CONFIG_DIR 受
+    FREECAD_AI_CONFIG_DIR / XDG_CONFIG_HOME 影响）——目录对不上导致
+    user_tools 链了却不被发现（registry 53 个全是内置）。
+    """
+    try:
+        from freecad_ai.config import USER_TOOLS_DIR
+        return Path(USER_TOOLS_DIR)
+    except Exception:  # freecad-ai 不可 import（直跑 CLI 等场景）→ 老路径兜底
+        return USER_TOOLS_DIR
+
+
 def link_user_tools():
     """把我们的 user_tool 文件链接到 freecad-ai 自动发现目录。"""
-    USER_TOOLS_DIR.mkdir(parents=True, exist_ok=True)
+    target_dir = _real_user_tools_dir()
+    target_dir.mkdir(parents=True, exist_ok=True)
     linked = []
     for src in OUR_TOOL_FILES:
         if not src.exists():
             print(f"[floorplan-mcp] 跳过（不存在）: {src}", file=sys.stderr)
             continue
-        target = USER_TOOLS_DIR / src.name
+        target = target_dir / src.name
         if not target.exists():
             try:
                 target.symlink_to(src)
