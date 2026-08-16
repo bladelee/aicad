@@ -122,8 +122,9 @@ jobs:
 
       - name: Smoke test — pytest（镜像内置测试）
         run: |
-          docker run --rm ${{ env.FLOORPLAN_IMAGE }}:${{ github.ref_name }} \
-            /opt/FreeCAD/usr/bin/python -m pytest /opt/aicad/tools/core/test_core_api.py -q
+          docker run --rm --entrypoint /opt/FreeCAD/usr/bin/python \
+            ${{ env.FLOORPLAN_IMAGE }}:${{ github.ref_name }} \
+            -m pytest /opt/aicad/tools/core/test_core_api.py -q
 
       # ─── 4. push ghcr.io（冒烟全绿才推）───
       - name: Log in to GHCR
