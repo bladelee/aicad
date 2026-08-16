@@ -145,16 +145,58 @@ jobs:
           docker push ${{ env.LIBREDWG_IMAGE }}:latest
 
       # ─── 5. 附产物到 GitHub Release（离线安装用 tar）───
-      - name: Save offline tar
+      # runner 磁盘坑（实战教训 2026-08-16）:
+      #   - docker save 落未压缩 .tar 再 gzip → 磁盘峰值翻倍 → no space left
+      #   - GitHub Release 单文件上限 2GiB → 超限必须分段
+      - name: Save offline tar (piped gzip, disk-friendly)
         run: |
+          df -h / | tail -1
+          # 镜像已 push，build 缓存不再需要 — 先释放几 GB
+          docker builder prune -af || true
+          df -h / | tail -1
           mkdir -p dist
-          docker save ${{ env.FLOORPLAN_IMAGE }}:${{ github.ref_name }} -o dist/floorplan-mcp-${{ github.ref_name }}.tar
-          docker save ${{ env.LIBREDWG_IMAGE }}:${{ github.ref_name }} -o dist/libredwg-cli-${{ github.ref_name }}.tar
-          # 压缩可省 40% 体积（tar 里 FreeCAD AppImage 已是压缩过的，收益小但聊胜于无）
-          gzip dist/*.tar
+          # 管道直灌 gzip，不落未压缩中间 .tar
+          docker save ${{ env.LIBREDWG_IMAGE }}:${{ github.ref_name }} | gzip > dist/libredwg-cli-${{ github.ref_name }}.tar.gz
+          docker save ${{ env.FLOORPLAN_IMAGE }}:${{ github.ref_name }} | gzip > dist/floorplan-mcp-${{ github.ref_name }}.tar.gz
+          # GitHub Release 单文件限 2GiB；超限分成 1900m 段（cat 合并后 docker load）
+          for f in dist/*.tar.gz; do
+            if [ "$(stat -c%s "$f")" -gt 2038439360 ]; then
+              echo "== splitting $f (>2GiB) =="
+              split -b 1900m -d "$f" "$f."
+              rm "$f"
+            fi
+          done
+          ls -lh dist/
 
       - name: Create GitHub Release with artifacts
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
+          body: |
+            ## 快速开始
+
+            ```bash
+            docker pull ghcr.io/bladelee/floorplan-mcp:${{ github.ref_name }}
+            docker pull ghcr.io/bladelee/libredwg-cli:${{ github.ref_name }}
+
+            # DWG → DXF（每项目首次一次）
+            docker run --rm -v "$PWD:/data" ghcr.io/bladelee/libredwg-cli:${{ github.ref_name }} \
+              -y -o /data/out.dxf /data/your.dwg
+
+            # 改墙 +500mm（CLI 原型）
+            docker run --rm -v "$PWD:/data" ghcr.io/bladelee/floorplan-mcp:${{ github.ref_name }} \
+              move-wall --dxf /data/out.dxf --handle <HANDLE> --dx 500 --out /data/moved.dxf
+            ```
+
+            ## 离线安装（无外网环境）
+
+            下载下方 tar.gz 附件后：
+            ```bash
+            # 若附件是分段的（.00/.01...），先合并：
+            cat floorplan-mcp-${{ github.ref_name }}.tar.gz.* > floorplan-mcp.tar.gz
+            docker load < floorplan-mcp.tar.gz
+            docker load < libredwg-cli-${{ github.ref_name }}.tar.gz
+            ```
+
+            详细文档见仓库 `docs/01-产品/客户部署使用手册.md`。
           files: dist/*
