@@ -145,37 +145,33 @@ jobs:
           docker push ${{ env.LIBREDWG_IMAGE }}:latest
 
       # ─── 5. 附产物到 GitHub Release（离线安装用 tar）───
-      # runner 磁盘实战坑（2026-08-16，三连修）:
-      #   1. docker save 未压缩 tar + gzip → 峰值翻倍爆盘
-      #   2. / 盘在 tar 前就被 buildx loaded 镜像占满（builder prune 0B：GHA cache 在远端）
-      #   → 解法：dist 放 /mnt（~66G 空闲）+ 管道 gzip + save 完一个删一个镜像
-      #   3. GitHub Release 单文件限 2GiB → split 1900m 分段
-      - name: Save offline tar (/mnt + piped gzip + delete-as-we-go)
+      # runner 磁盘实战坑（2026-08-16，四连修）:
+      #   1. save 落未压缩 tar 再 gzip → 翻倍爆盘 → 管道直灌 gzip
+      #   2. / 盘 tar 前就 95%（buildx loaded 双镜像占 /var/lib/docker；GHA cache 在远端 prune 0B）
+      #   3. /mnt 无写权限（Permission denied）
+      #   → 终招：save|gzip|split 一条管道直出分段（磁盘峰值=产物本身）；
+      #          dist 落 RUNNER_TEMP；小镜像 save 完先删再处理主镜像
+      - name: Save offline tar (all-piped, segmented)
         run: |
-          DIST=/mnt/dist
+          DIST="${RUNNER_TEMP}/dist"
           mkdir -p "$DIST"
-          echo "== disk before =="
-          df -h / /mnt | tail -2
+          echo "== disk before =="; df -h / | tail -1
 
-          # 小镜像先走，save 完立刻删镜像释放 / 盘（/var/lib/docker 在 / 上）
-          docker save ${{ env.LIBREDWG_IMAGE }}:${{ github.ref_name }} | gzip > "$DIST/libredwg-cli-${{ github.ref_name }}.tar.gz"
+          # 1) 小镜像单文件（<2GiB），save 完立刻删释放 / 盘
+          docker save ${{ env.LIBREDWG_IMAGE }}:${{ github.ref_name }} \
+            | gzip > "$DIST/libredwg-cli-${{ github.ref_name }}.tar.gz"
           docker image rm ${{ env.LIBREDWG_IMAGE }}:${{ github.ref_name }} || true
 
-          docker save ${{ env.FLOORPLAN_IMAGE }}:${{ github.ref_name }} | gzip > "$DIST/floorplan-mcp-${{ github.ref_name }}.tar.gz"
+          echo "== disk after libredwg =="; df -h / | tail -1
+
+          # 2) 主镜像直出 1900m 分段（GitHub Release 单文件 2GiB 上限；
+          #    管道无中间副本，峰值=分段总和）
+          docker save ${{ env.FLOORPLAN_IMAGE }}:${{ github.ref_name }} \
+            | gzip | split -b 1900m -d - "$DIST/floorplan-mcp-${{ github.ref_name }}.tar.gz."
           docker image rm ${{ env.FLOORPLAN_IMAGE }}:${{ github.ref_name }} || true
+          docker image prune -f || true
 
-          echo "== disk after =="
-          df -h / /mnt | tail -2
-
-          # GitHub Release 单文件 2GiB 上限；超限分 1900m 段（cat 合并后 docker load）
-          cd "$DIST"
-          for f in *.tar.gz; do
-            if [ "$(stat -c%s "$f")" -gt 2038439360 ]; then
-              echo "== splitting $f (>2GiB) =="
-              split -b 1900m -d "$f" "$f."
-              rm "$f"
-            fi
-          done
+          echo "== disk after all =="; df -h / | tail -1
           ls -lh "$DIST"
 
       - name: Create GitHub Release with artifacts
@@ -200,13 +196,13 @@ jobs:
 
             ## 离线安装（无外网环境）
 
-            下载下方 tar.gz 附件后：
+            下载下方附件后：
             ```bash
-            # 若附件是分段的（.00/.01...），先合并：
+            # 主镜像总是分段格式（.tar.gz.00/.01...），先合并：
             cat floorplan-mcp-${{ github.ref_name }}.tar.gz.* > floorplan-mcp.tar.gz
             docker load < floorplan-mcp.tar.gz
             docker load < libredwg-cli-${{ github.ref_name }}.tar.gz
             ```
 
             详细文档见仓库 `docs/01-产品/客户部署使用手册.md`。
-          files: /mnt/dist/*
+          files: ${RUNNER_TEMP}/dist/*
