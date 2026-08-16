@@ -25,23 +25,36 @@ USER_TOOLS_DIR = Path(
         str(Path.home() / ".config/FreeCAD/FreeCADAI/tools"),
     )
 )
-OUR_TOOL_FILE = Path(os.environ.get(
-    "FLOORPLAN_TOOLS_FILE",
-    "/opt/floorplan/tools/floorplan_tools.py",
-))
+OUR_TOOL_FILES = [
+    Path(os.environ.get(
+        "FLOORPLAN_TOOLS_FILE",
+        "/opt/floorplan/tools/floorplan_tools.py",
+    )),
+    # v0.2 (C4-γ)：装修改造工具（move_wall / rename_material / ...）
+    Path(os.environ.get(
+        "RENOVATION_TOOLS_FILE",
+        "/opt/floorplan/tools/mcp_renovation_tools.py",
+    )),
+]
 
 
 def link_user_tools():
-    """把 floorplan_tools.py 链接到 freecad-ai 自动发现目录。"""
+    """把我们的 user_tool 文件链接到 freecad-ai 自动发现目录。"""
     USER_TOOLS_DIR.mkdir(parents=True, exist_ok=True)
-    target = USER_TOOLS_DIR / OUR_TOOL_FILE.name
-    if not target.exists():
-        try:
-            target.symlink_to(OUR_TOOL_FILE)
-        except OSError:
-            # 某些文件系统不支持 symlink，退化为复制
-            shutil.copy2(OUR_TOOL_FILE, target)
-    return target
+    linked = []
+    for src in OUR_TOOL_FILES:
+        if not src.exists():
+            print(f"[floorplan-mcp] 跳过（不存在）: {src}", file=sys.stderr)
+            continue
+        target = USER_TOOLS_DIR / src.name
+        if not target.exists():
+            try:
+                target.symlink_to(src)
+            except OSError:
+                # 某些文件系统不支持 symlink，退化为复制
+                shutil.copy2(src, target)
+        linked.append(target)
+    return linked
 
 
 def redirect_stdout_stderr():

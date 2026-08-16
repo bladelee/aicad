@@ -4,6 +4,30 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [v0.2.0] — 2026-08-16  MCP 工具注册（C4-γ）
+
+### 新增
+
+- **MCP 工具 ×6**（`floorplan-mcp/tools/mcp_renovation_tools.py`）：设计师在 Goose/OpenWork 用自然语言改图
+  - `move_wall` — 平移墙体（可选联动同族图层）
+  - `move_wall_with_dim` — 移墙 + 同步 DIMENSION 标注
+  - `move_wall_with_floor_ceil` — 移墙 + 联动地坪/天花/家具
+  - `rename_material` — 材料码全字替换（支持 dry_run 预览）
+  - `verify_rename` — 验证替换彻底性
+  - `probe_dimensions` — 只读探查墙附近标注
+- **stdout 纯净防护**（`tools/core/_stdio_guard.py`）：fd 级重定向，老代码 68 处 print 不再污染 JSON-RPC / CLI JSON 输出
+- **分发策略落地**：仓库私有 + ghcr 镜像带凭证分发（PAT read:packages）
+
+### 修复
+
+- `mcp_server_stdio.py` 升级支持链接多个 user_tool 文件（v1 只链 1 个）
+- MCP `move_wall` 包装对齐老实现真实签名（sync_layers: bool）
+
+### 验证
+
+- 本地：stdout 纯净 ✓ rename dry_run ✓ probe ✓
+- 镜像内：6 工具加载 ✓ move_wall 真实改图 ✓ probe ✓
+
 ## [v0.1.0] — 2026-08-16  首个发布原型
 
 ### 新增

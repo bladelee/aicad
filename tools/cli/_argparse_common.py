@@ -12,9 +12,26 @@ if str(_ROOT) not in sys.path:
 
 
 def print_result_json(result: dict) -> None:
-    """把核心函数返回的 dict 美化打印到 stdout。"""
+    """把核心函数返回的 dict 美化打印到 stdout（唯一 stdout 输出点）。"""
     import json
     print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+
+
+def run_core(fn, **kwargs) -> int:
+    """CLI 统一执行入口：guard_stdout 包住 core 调用，stdout 只留纯 JSON。
+
+    老实现里 68 处 print 会污染 stdout；fd 级重定向到 stderr 后，
+    print_result_json 是唯一的 stdout 写入者（机器可读）。
+    失败走 fail()（stderr + exit 1）。
+    """
+    from tools.core._stdio_guard import guard_stdout
+    try:
+        with guard_stdout():
+            result = fn(**kwargs)
+    except Exception as e:  # noqa: BLE001 — CLI 边界统一报错
+        return fail(f"执行失败: {type(e).__name__}: {e}")
+    print_result_json(result)
+    return 0 if result.get("ok", True) else 1
 
 
 def fail(msg: str, code: int = 1) -> int:
