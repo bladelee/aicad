@@ -215,4 +215,6 @@ jobs:
             ```
 
             详细文档见仓库 `docs/01-产品/客户部署使用手册.md`。
-          files: ${RUNNER_TEMP}/dist/*
+          # 注意：with: 输入里 shell 风格 ${RUNNER_TEMP} 不展开（第九修 2026-08-16：
+          # 附件 0 就是这个坑），必须用 GitHub 表达式 ${{ runner.temp }}
+          files: ${{ runner.temp }}/dist/*
