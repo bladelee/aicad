@@ -70,47 +70,55 @@ jobs:
           echo "== floorplan --help =="
           docker run --rm ${{ env.FLOORPLAN_IMAGE }}:${{ github.ref_name }} floorplan --help
 
-      - name: Smoke test — CLI 真实功能（生成最小 DXF 后改墙）
+      - name: Write smoke fixtures
+        id: smoke-fixture
         run: |
-          # 造一个两堵墙的最小 DXF 冒烟用例（不用 18MB 真实样本，保持 CI 轻）
-          # 注意: 用 workspace 子目录而非 /tmp（规避部分环境 /tmp 挂载隔离）
-          SMOKE=$RUNNER_TEMP/smoke
-          mkdir -p "$SMOKE"
-          cat > "$SMOKE/mkfixture.py" <<'EOF'
-import os, ezdxf
-out = os.environ["SMOKE_DIR"]
-doc = ezdxf.new("R2018")
-msp = doc.modelspace()
-msp.add_line((0,0),(10000,0), dxfattribs={"layer":"A原建筑墙体"})
-msp.add_line((0,0),(0,8000),  dxfattribs={"layer":"A原建筑墙体"})
-handle = msp[0].dxf.handle
-doc.saveas(os.path.join(out, "fixture.dxf"))
-print("WALL_HANDLE=%s" % handle)
-EOF
+          mkdir -p "$RUNNER_TEMP/smoke"
+          cat > "$RUNNER_TEMP/smoke/mkfixture.py" <<'PYEOF'
+          import os, ezdxf
+          out = os.environ["SMOKE_DIR"]
+          doc = ezdxf.new("R2018")
+          msp = doc.modelspace()
+          msp.add_line((0,0),(10000,0), dxfattribs={"layer":"A原建筑墙体"})
+          msp.add_line((0,0),(0,8000),  dxfattribs={"layer":"A原建筑墙体"})
+          handle = msp[0].dxf.handle
+          doc.saveas(os.path.join(out, "fixture.dxf"))
+          print("WALL_HANDLE=%s" % handle)
+          PYEOF
+          # heredoc 结束符必须顶格，但 YAML block 内不能顶格 —— 用 sed 去缩进
+          sed -i 's/^          //' "$RUNNER_TEMP/smoke/mkfixture.py"
           python3 -m pip install --quiet ezdxf
-          SMOKE_DIR="$SMOKE" python3 "$SMOKE/mkfixture.py" > "$SMOKE/handle.txt"
-          HANDLE=$(grep -oE 'WALL_HANDLE=\S+' "$SMOKE/handle.txt" | cut -d= -f2)
+          SMOKE_DIR="$RUNNER_TEMP/smoke" python3 "$RUNNER_TEMP/smoke/mkfixture.py" > "$RUNNER_TEMP/smoke/handle.txt"
+          HANDLE=$(grep -oE 'WALL_HANDLE=\S+' "$RUNNER_TEMP/smoke/handle.txt" | cut -d= -f2)
+          echo "HANDLE=$HANDLE" >> "$GITHUB_OUTPUT"
           echo "== fixture wall handle: $HANDLE =="
 
+      - name: Smoke test — CLI 真实功能（改墙 500mm）
+        env:
+          HANDLE: ${{ steps.smoke-fixture.outputs.HANDLE }}
+        run: |
+          SMOKE=$RUNNER_TEMP/smoke
           docker run --rm -v "$SMOKE:/data" \
             ${{ env.FLOORPLAN_IMAGE }}:${{ github.ref_name }} \
             move-wall --dxf /data/fixture.dxf --handle "$HANDLE" --dx 500 --out /data/fixture_moved.dxf
 
-          echo "== verify output exists, input intact, and wall moved =="
+          echo "== verify in-image (input intact + wall moved 500mm) =="
+          cat > "$SMOKE/verify.py" <<'PYEOF'
+          import ezdxf, os
+          assert os.path.exists("/data/fixture.dxf"), "input file was clobbered!"
+          a = ezdxf.readfile("/data/fixture.dxf")
+          b = ezdxf.readfile("/data/fixture_moved.dxf")
+          ha = [e for e in a.modelspace() if e.dxftype()=="LINE"][0]
+          hb = [e for e in b.modelspace() if e.dxftype()=="LINE"][0]
+          dx = hb.dxf.start.x - ha.dxf.start.x
+          print(f"dx = {dx:.1f}")
+          assert abs(dx - 500.0) < 0.01, "wall did not move 500mm!"
+          print("SMOKE OK - input intact, wall moved exactly 500mm")
+          PYEOF
+          sed -i 's/^          //' "$SMOKE/verify.py"
           docker run --rm -i -v "$SMOKE:/data" --entrypoint /opt/FreeCAD/usr/bin/python \
             -e PYTHONHOME=/opt/FreeCAD/usr -e LD_LIBRARY_PATH=/opt/FreeCAD/usr/lib \
-            ${{ env.FLOORPLAN_IMAGE }}:${{ github.ref_name }} - <<'EOF'
-import ezdxf, os
-assert os.path.exists("/data/fixture.dxf"), "input file was clobbered!"
-a = ezdxf.readfile("/data/fixture.dxf")
-b = ezdxf.readfile("/data/fixture_moved.dxf")
-ha = [e for e in a.modelspace() if e.dxftype()=="LINE"][0]
-hb = [e for e in b.modelspace() if e.dxftype()=="LINE"][0]
-dx = hb.dxf.start.x - ha.dxf.start.x
-print(f"dx = {dx:.1f}")
-assert abs(dx - 500.0) < 0.01, "wall did not move 500mm!"
-print("SMOKE OK ✅ input intact, wall moved exactly 500mm")
-EOF
+            ${{ env.FLOORPLAN_IMAGE }}:${{ github.ref_name }} - < "$SMOKE/verify.py"
 
       - name: Smoke test — pytest（镜像内置测试）
         run: |
