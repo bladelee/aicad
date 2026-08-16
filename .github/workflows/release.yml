@@ -73,37 +73,44 @@ jobs:
       - name: Smoke test — CLI 真实功能（生成最小 DXF 后改墙）
         run: |
           # 造一个两堵墙的最小 DXF 冒烟用例（不用 18MB 真实样本，保持 CI 轻）
-          cat > /tmp/mkfixture.py <<'EOF'
-          import ezdxf
-          doc = ezdxf.new("R2018")
-          msp = doc.modelspace()
-          msp.add_line((0,0),(10000,0), dxfattribs={"layer":"A原建筑墙体"})
-          msp.add_line((0,0),(0,8000),  dxfattribs={"layer":"A原建筑墙体"})
-          handle = msp[0].dxf.handle
-          doc.saveas("/tmp/fixture.dxf")
-          print("WALL_HANDLE=%s" % handle)
-          EOF
+          # 注意: 用 workspace 子目录而非 /tmp（规避部分环境 /tmp 挂载隔离）
+          SMOKE=$RUNNER_TEMP/smoke
+          mkdir -p "$SMOKE"
+          cat > "$SMOKE/mkfixture.py" <<'EOF'
+import os, ezdxf
+out = os.environ["SMOKE_DIR"]
+doc = ezdxf.new("R2018")
+msp = doc.modelspace()
+msp.add_line((0,0),(10000,0), dxfattribs={"layer":"A原建筑墙体"})
+msp.add_line((0,0),(0,8000),  dxfattribs={"layer":"A原建筑墙体"})
+handle = msp[0].dxf.handle
+doc.saveas(os.path.join(out, "fixture.dxf"))
+print("WALL_HANDLE=%s" % handle)
+EOF
           python3 -m pip install --quiet ezdxf
-          python3 /tmp/mkfixture.py > /tmp/handle.txt
-          HANDLE=$(grep -oP '(?<=WALL_HANDLE=).*' /tmp/handle.txt)
+          SMOKE_DIR="$SMOKE" python3 "$SMOKE/mkfixture.py" > "$SMOKE/handle.txt"
+          HANDLE=$(grep -oE 'WALL_HANDLE=\S+' "$SMOKE/handle.txt" | cut -d= -f2)
           echo "== fixture wall handle: $HANDLE =="
 
-          docker run --rm -v /tmp:/data \
+          docker run --rm -v "$SMOKE:/data" \
             ${{ env.FLOORPLAN_IMAGE }}:${{ github.ref_name }} \
-            move-wall --dxf /data/fixture.dxf --handle $HANDLE --dx 500 --out /data/fixture_moved.dxf
+            move-wall --dxf /data/fixture.dxf --handle "$HANDLE" --dx 500 --out /data/fixture_moved.dxf
 
-          echo "== verify output exists and handle moved =="
-          python3 - <<'EOF'
-          import ezdxf
-          a = ezdxf.readfile("/tmp/fixture.dxf")
-          b = ezdxf.readfile("/tmp/fixture_moved.dxf")
-          ha = [e for e in a.modelspace() if e.dxftype()=="LINE"][0]
-          hb = [e for e in b.modelspace() if e.dxftype()=="LINE"][0]
-          dx = hb.dxf.start.x - ha.dxf.start.x
-          print(f"dx = {dx:.1f}")
-          assert abs(dx - 500.0) < 0.01, "wall did not move 500mm!"
-          print("SMOKE OK ✅ wall moved exactly 500mm")
-          EOF
+          echo "== verify output exists, input intact, and wall moved =="
+          docker run --rm -i -v "$SMOKE:/data" --entrypoint /opt/FreeCAD/usr/bin/python \
+            -e PYTHONHOME=/opt/FreeCAD/usr -e LD_LIBRARY_PATH=/opt/FreeCAD/usr/lib \
+            ${{ env.FLOORPLAN_IMAGE }}:${{ github.ref_name }} - <<'EOF'
+import ezdxf, os
+assert os.path.exists("/data/fixture.dxf"), "input file was clobbered!"
+a = ezdxf.readfile("/data/fixture.dxf")
+b = ezdxf.readfile("/data/fixture_moved.dxf")
+ha = [e for e in a.modelspace() if e.dxftype()=="LINE"][0]
+hb = [e for e in b.modelspace() if e.dxftype()=="LINE"][0]
+dx = hb.dxf.start.x - ha.dxf.start.x
+print(f"dx = {dx:.1f}")
+assert abs(dx - 500.0) < 0.01, "wall did not move 500mm!"
+print("SMOKE OK ✅ input intact, wall moved exactly 500mm")
+EOF
 
       - name: Smoke test — pytest（镜像内置测试）
         run: |
