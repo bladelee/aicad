@@ -1,0 +1,64 @@
+# ODA File Converter 容器镜像（CLI 模式）
+#
+# ODA 是 Qt6 GUI 应用，但其 CLI 模式可批量转换。在 headless 容器里需要：
+#   1. extract AppImage（避开 fuse 依赖）
+#   2. 装 Qt xcb 全套依赖（libxkbcommon-x11-0 / libxcb-xkb1 / libxcb-cursor0 等）
+#   3. Xvfb 提供虚拟 X display（ODA 启动时强制初始化 Qt xcb 插件）
+#
+# 用法（宿主机）：
+#   docker build -f dwg/Dockerfile.test -t oda-cli dwg/
+#   docker run --rm -v "$PWD:/data" oda-cli
+#
+# 默认 CMD：6 个官方 CLI 参数
+#   /data/dwg  源目录
+#   /data/dwg/dxf  目标目录
+#   *.dwg  过滤器
+#   "ACAD2018 DXF"  输出版本+格式
+#   0 0  recurse / audit
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+COPY oda_pkg/oda.AppImage /tmp/oda.AppImage
+
+# extract AppImage（避开容器内 fuse 依赖）+ 装 ODA 运行时依赖（Qt xcb 全套）
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        libgl1 libglu1-mesa libxkbcommon0 libxkbcommon-x11-0 libxcb-xkb1 \
+        libdbus-1-3 libxcb-cursor0 libxcb-icccm4 libxcb-image0 \
+        libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 \
+        libxcb-xinerama0 libxcb-util1 \
+        libfontconfig1 libfreetype6 libpng16-16 \
+        libglib2.0-0 libxrender1 libxext6 libx11-6 libxcb1 libsm6 libxrandr2 libxi6 \
+        xvfb xauth \
+        fonts-dejavu-core \
+    && rm -rf /var/lib/apt/lists/* \
+    && chmod +x /tmp/oda.AppImage \
+    && cd /opt && /tmp/oda.AppImage --appimage-extract >/dev/null \
+    && mv squashfs-root oda \
+    && rm /tmp/oda.AppImage
+
+# 把 ODA 自带 Qt lib 加入 LD_LIBRARY_PATH（让系统 Qt 库不会覆盖它）
+ENV ODA_HOME=/opt/oda
+ENV LD_LIBRARY_PATH="${ODA_HOME}/lib"
+ENV PATH="${ODA_HOME}/usr/bin:/usr/bin:${PATH}"
+
+# 准备 Xvfb 启动脚本作为 entrypoint
+RUN printf '#!/bin/bash\n\
+set -e\n\
+rm -f /tmp/.X1-lock /tmp/.X11-unix/X1\n\
+Xvfb :1 -screen 0 1024x768x24 -nolisten tcp -ac >/tmp/xvfb.log 2>&1 &\n\
+XVFB_PID=$!\n\
+sleep 2\n\
+export DISPLAY=:1\n\
+export XAUTHORITY=\n\
+ODA_BIN=$(find %s -name ODAFileConverter -type f 2>/dev/null | head -1)\n\
+[ -z "$ODA_BIN" ] && ODA_BIN=/opt/oda/AppRun\n\
+exec "$ODA_BIN" "$@"\n\
+' "${ODA_HOME}" > /entrypoint.sh \
+    && chmod +x /entrypoint.sh
+
+WORKDIR /work
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["/data/dwg", "/data/dwg/dxf", "*.dwg", "ACAD2018 DXF", "0", "0"]

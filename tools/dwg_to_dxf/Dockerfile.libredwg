@@ -1,0 +1,39 @@
+# Dockerfile.libredwg : 编译 libredwg 进镜像作为 dwg2dxf 工具
+# libredwg 在 Ubuntu 官方源没有包，必须从源码编译（约 5-8 分钟构建时间）
+# libredwg 完全开源，免 EULA（与 ODA 不同），保真度略低但对 R2000-R2018 都支持
+
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# 编译依赖 + 运行时依赖（只装最小必需）
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential autoconf automake libtool texinfo pkg-config \
+        git ca-certificates wget \
+        pcre2-utils libpcre2-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# 拉源码并构建
+# --disable-python / --disable-perl：跳过 SWIG 绑定（不为它们装 dev 依赖）
+# --enable-write：dwg2dxf 需要它
+# 关键：autogen.sh 会跑 `git fetch --tags`，国内网络不通会卡死
+#   → 用冒泡预填版本号（强制覆盖 git-version-gen）：
+#     echo 版本 → .version 文件，autogen.sh 会跳过 fetch
+RUN mkdir -p /opt/build && cd /opt/build \
+    && git clone --depth 1 --no-tags https://github.com/LibreDWG/libredwg.git \
+    && cd libredwg \
+    && echo "0.14.8566" > .version \
+    && echo "0.14.8566" > .tarball-version \
+    && sed -i '/git fetch.*tags/d' autogen.sh \
+    && sh autogen.sh \
+    && ./configure --disable-shared --enable-write \
+                   --disable-python --disable-perl --disable-examples \
+    && make -j"$(nproc)" \
+    && make install \
+    && ldconfig \
+    && rm -rf /opt/build
+
+WORKDIR /work
+# 默认命令：把 /data/dwg 下所有 .dwg 转为 .dxf 输出到 /data/dwg/dxf
+ENTRYPOINT ["dwg2dxf"]
+CMD ["-y", "-o", "/data/dwg/dxf/converted.dxf", "/data/dwg"]

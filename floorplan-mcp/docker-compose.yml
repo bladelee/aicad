@@ -1,0 +1,27 @@
+# docker-compose for floorplan-mcp（MVP: stdio 单通道）
+# 客户端（Goose/OpenWork）通过 `docker exec -i` 拉起容器内的 stdio server，
+# 不需要暴露端口。Phase 1.5 加 streamable_http 后再开 ports。
+#
+# 用户使用：
+#   1. 装好 Docker Desktop（Win/macOS）或 Docker（Linux）
+#   2. 把装修图放 ~/dwgs/
+#   3. docker compose up -d
+#   4. 按 clients/goose.md 或 clients/openwork.md 配置客户端
+services:
+  floorplan-mcp:
+    build: .
+    image: floorplan-mcp:latest
+    container_name: floorplan-mcp
+    restart: unless-stopped
+    # MVP stdio 模式不需要端口；streamable_http（Phase 1.5）需放开注释：
+    # ports:
+    #   - "3000:3000"
+    volumes:
+      # bind mount：用户 DWG ↔ 容器 /data 直接共享，免文件上传端点
+      - "${HOME}/dwgs:/data"
+      # （可选）挂载本机 ODA 安装目录，合规规避 EULA 再分发
+      # - "/path/to/ODAFileConverter:/opt/oda:ro"
+    environment:
+      FLOORPLAN_BACKEND: freecad   # freecad | ezdxf | ifc
+      # ODA_FILE_CONVERTER: /opt/oda/ODAFileConverter   # 挂载 ODA 后启用
+    mem_limit: 4g                  # 装修图大文件保险

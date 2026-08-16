@@ -1,0 +1,30 @@
+# Git LFS 配置：大体积原始样本文件走 LFS
+# 首次启用前请安装：https://git-lfs.com
+#   git lfs install
+# 提交时大文件自动走 LFS，避免主仓库膨胀
+
+# 原始 DWG 图纸（约 18MB，AutoCAD 闭源格式）
+*.dwg filter=lfs diff=lfs merge=lfs -text
+
+# PDF 渲染产物（部分图纸是扫描件，体积较大）
+samples/**/*.pdf filter=lfs diff=lfs merge=lfs -text
+
+# Docker 镜像 tar（如本地保存分发）
+*.tar filter=lfs diff=lfs merge=lfs -text
+
+# ========================================
+# 文本文件处理规则（不走 LFS）
+# ========================================
+
+# DXF 是文本格式（AutoCAD 图形交换格式），按文本处理可看 diff、可回滚审阅改图逻辑
+*.dxf text=auto
+
+# markdown / python / shell（含中文文件名路径，强制统一换行符）
+*.md text=auto
+*.py text=auto
+*.sh text=auto eol=lf
+
+# 配置与 JSON（scan_report.json 等小文件，按文本处理便于 diff）
+*.json text=auto
+*.yml text=auto
+*.yaml text=auto
