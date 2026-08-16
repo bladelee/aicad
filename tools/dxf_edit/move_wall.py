@@ -207,6 +207,7 @@ def move_wall(
     sync_layers: bool = True,
     backup_dir: Optional[Path] = None,
     output_suffix: str = "_moved",
+    out_path: Optional[Path] = None,
     params: Optional[dict] = None,
 ) -> dict:
     """主入口。
@@ -217,7 +218,13 @@ def move_wall(
         move_wall(path, idx=0, dx="W*0.1", params={"W": 5000})
 
     支持的 params 来源可以是用户输入，也可以是另一张图算出来的几何量。
+    dxf_path 接受 str 或 Path（入口统一归一化，CLI/MCP 传 str 也行）。
     """
+    # 归一化：CLI/MCP 层可能传 str（历史 bug：老代码假定 Path，.name 崩）
+    if isinstance(dxf_path, str):
+        dxf_path = Path(dxf_path)
+    if backup_dir is not None and isinstance(backup_dir, str):
+        backup_dir = Path(backup_dir)
     print(f"=== move_wall ===")
     print(f"  输入 : {dxf_path.name}")
     print(f"  偏移 : dx={dx!r}, dy={dy!r}, mode={mode}"
@@ -260,8 +267,12 @@ def move_wall(
     else:
         bak = None
 
-    # 输出
-    out = dxf_path.with_name(f"{dxf_path.stem}{output_suffix}.dxf")
+    # 输出：优先 out_path（显式），否则 stem+suffix（绝不能空 suffix 原地覆写输入！）
+    if out_path is not None:
+        out = Path(out_path)
+    else:
+        suffix = output_suffix or "_moved"
+        out = dxf_path.with_name(f"{dxf_path.stem}{suffix}.dxf")
     safe_saveas(doc, out)
     print(f"  输出 : {out.name}")
 

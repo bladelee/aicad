@@ -51,13 +51,30 @@ RUN mkdir -p /opt/freecad-ai \
 # freecad-ai stdlib only，无需装包；它的 user_tools 扩展机制自动发现工具
 
 # ─── 我们自己的装修图工具 + stdio 入口 + backends ──
-COPY tools /opt/floorplan/tools
-COPY backends /opt/floorplan/backends
-COPY mcp_server_stdio.py /opt/floorplan/mcp_server_stdio.py
+# ⚠️ build context 是仓库根：这里 MCP 侧的文件带 floorplan-mcp/ 前缀，
+# 与下面 C4-δ 的仓库根 tools/（core+cli）是两套不同文件。
+COPY floorplan-mcp/tools/ /opt/floorplan/tools/
+COPY floorplan-mcp/backends/ /opt/floorplan/backends/
+COPY floorplan-mcp/mcp_server_stdio.py /opt/floorplan/mcp_server_stdio.py
 ENV FLOORPLAN_TOOLS_FILE=/opt/floorplan/tools/floorplan_tools.py
 ENV FLOORPLAN_BACKEND=${FLOORPLAN_BACKEND:-freecad}
 ENV PYTHONPATH="${PYTHONPATH}:/opt/floorplan:/opt/freecad-ai"
-
+# ─── C4-δ：仓库根 tools/（core+cli+老实现）内置镜像 + floorplan 全局命令 ───
+# ⚠️ build context 必须是仓库根（docker build -f floorplan-mcp/Dockerfile .）
+#   core 层是"重新暴露"层：真正业务代码仍在 dxf_edit/ dxf_scan/（经 sys.path 引用），
+#   所以这三个目录都要进镜像。
+COPY tools/core/ /opt/aicad/tools/core/
+COPY tools/cli/ /opt/aicad/tools/cli/
+COPY tools/dxf_edit/ /opt/aicad/tools/dxf_edit/
+COPY tools/dxf_scan/ /opt/aicad/tools/dxf_scan/
+COPY tools/__init__.py /opt/aicad/tools/__init__.py
+ENV AICAD_ROOT=/opt/aicad
+RUN printf '%s\n' \
+    '#!/bin/sh' \
+    '# floorplan — 装修图纸自动化 CLI 入口（C4-δ）' \
+    'exec /opt/FreeCAD/usr/bin/python /opt/aicad/tools/cli/main.py "$@"' \
+    > /usr/local/bin/floorplan \
+    && chmod +x /usr/local/bin/floorplan
 # 备选 backend 需要 ezdxf + shapely（装到 FreeCAD 的 conda Python）
 # 注意：AppImage 解包后可执行文件是 /opt/FreeCAD/usr/bin/python（无版本号后缀），
 # 且必须设 PYTHONHOME（AppRun 的关键 env），否则 loader 找不到 libpython，报 "No such file"。
@@ -80,8 +97,12 @@ VOLUME ["/data"]
 
 EXPOSE 3000
 
-COPY entrypoint.sh /entrypoint.sh
-COPY install_oda.sh /opt/install_oda.sh
+COPY floorplan-mcp/entrypoint.sh /entrypoint.sh
+COPY floorplan-mcp/install_oda.sh /opt/install_oda.sh
 RUN chmod +x /entrypoint.sh /opt/install_oda.sh
 
+# 默认行为：把 CMD 当作 floorplan 子命令透传（C4-δ 用法形态）
+#   docker run ghcr.io/bladelee/floorplan-mcp move-wall --dxf ... --handle ... --dx 500
+# 不传参数时（stdio 模式）由 entrypoint 决定行为（保持常驻）
 ENTRYPOINT ["/entrypoint.sh"]
+CMD ["floorplan", "--help"]

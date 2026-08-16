@@ -2,6 +2,9 @@
 # 客户端（Goose/OpenWork）通过 `docker exec -i` 拉起容器内的 stdio server，
 # 不需要暴露端口。Phase 1.5 加 streamable_http 后再开 ports。
 #
+# ⚠️ build context 必须是仓库根（CLI 代码 tools/core、tools/cli 在根）：
+#   docker build -f floorplan-mcp/Dockerfile -t floorplan-mcp .
+#
 # 用户使用：
 #   1. 装好 Docker Desktop（Win/macOS）或 Docker（Linux）
 #   2. 把装修图放 ~/dwgs/
@@ -9,7 +12,10 @@
 #   4. 按 clients/goose.md 或 clients/openwork.md 配置客户端
 services:
   floorplan-mcp:
-    build: .
+    # context 必须是仓库根（CLI 代码在根 tools/）；dockerfile 在本目录
+    build:
+      context: ..
+      dockerfile: floorplan-mcp/Dockerfile
     image: floorplan-mcp:latest
     container_name: floorplan-mcp
     restart: unless-stopped

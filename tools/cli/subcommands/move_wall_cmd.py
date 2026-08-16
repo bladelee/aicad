@@ -51,16 +51,10 @@ def _run(args: argparse.Namespace) -> int:
             mode=args.mode,
             sync_layers=args.sync,
             backup_dir=args.backup_dir or None,
-            output_suffix="_moved" if not args.out else "",
+            out_path=args.out or None,
         )
     except Exception as e:
         return fail(f"执行失败: {type(e).__name__}: {e}")
-
-    # move_wall 用 output_suffix 模式，如果用户给了 --out 就重命名
-    if args.out and result.get("output") and result["output"] != args.out:
-        import shutil
-        shutil.move(result["output"], args.out)
-        result["output"] = args.out
 
     print_result_json(result)
     return 0 if result.get("ok", True) else 1

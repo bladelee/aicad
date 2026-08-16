@@ -1,0 +1,144 @@
+# 发布流水线：tag v* 触发 → build 镜像 → 冒烟测试 → push ghcr.io → 附 Release
+#
+# 决策依据 docs/06-工程实操/发布与部署完整方案.md（2026-08-09 已确认）：
+#   - ghcr.io 公开分发
+#   - 主镜像 floorplan-mcp 不含 libredwg（GPL 隔离）；libredwg-cli 独立镜像
+#
+# 镜像地址：
+#   ghcr.io/bladelee/floorplan-mcp:<tag>
+#   ghcr.io/bladelee/libredwg-cli:<tag>
+#
+# 本地验证（不起 CI 也能跑同款检查）：
+#   docker build -f floorplan-mcp/Dockerfile -t floorplan-mcp:test .
+#   docker run --rm floorplan-mcp:test floorplan --help
+
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch: {}
+
+env:
+  REGISTRY: ghcr.io
+  FLOORPLAN_IMAGE: ghcr.io/${{ github.repository_owner }}/floorplan-mcp
+  LIBREDWG_IMAGE: ghcr.io/${{ github.repository_owner }}/libredwg-cli
+
+permissions:
+  contents: write      # 创建 GitHub Release + 上传产物
+  packages: write      # push ghcr.io
+
+jobs:
+  build-test-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # ─── 1. 主镜像 floorplan-mcp（FreeCAD + ezdxf + CLI + MCP）───
+      - name: Build floorplan-mcp
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: floorplan-mcp/Dockerfile
+          load: true
+          tags: |
+            ${{ env.FLOORPLAN_IMAGE }}:${{ github.ref_name }}
+            ${{ env.FLOORPLAN_IMAGE }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # ─── 2. 独立镜像 libredwg-cli（DWG↔DXF 翻译官，GPL 隔离）───
+      - name: Build libredwg-cli
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/dwg_to_dxf
+          file: tools/dwg_to_dxf/Dockerfile.libredwg
+          load: true
+          tags: |
+            ${{ env.LIBREDWG_IMAGE }}:${{ github.ref_name }}
+            ${{ env.LIBREDWG_IMAGE }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # ─── 3. 冒烟测试（不 push 就发现的错不浪费用户下载）───
+      - name: Smoke test — CLI 入口
+        run: |
+          echo "== floorplan --help =="
+          docker run --rm ${{ env.FLOORPLAN_IMAGE }}:${{ github.ref_name }} floorplan --help
+
+      - name: Smoke test — CLI 真实功能（生成最小 DXF 后改墙）
+        run: |
+          # 造一个两堵墙的最小 DXF 冒烟用例（不用 18MB 真实样本，保持 CI 轻）
+          cat > /tmp/mkfixture.py <<'EOF'
+          import ezdxf
+          doc = ezdxf.new("R2018")
+          msp = doc.modelspace()
+          msp.add_line((0,0),(10000,0), dxfattribs={"layer":"A原建筑墙体"})
+          msp.add_line((0,0),(0,8000),  dxfattribs={"layer":"A原建筑墙体"})
+          handle = msp[0].dxf.handle
+          doc.saveas("/tmp/fixture.dxf")
+          print("WALL_HANDLE=%s" % handle)
+          EOF
+          python3 -m pip install --quiet ezdxf
+          python3 /tmp/mkfixture.py > /tmp/handle.txt
+          HANDLE=$(grep -oP '(?<=WALL_HANDLE=).*' /tmp/handle.txt)
+          echo "== fixture wall handle: $HANDLE =="
+
+          docker run --rm -v /tmp:/data \
+            ${{ env.FLOORPLAN_IMAGE }}:${{ github.ref_name }} \
+            move-wall --dxf /data/fixture.dxf --handle $HANDLE --dx 500 --out /data/fixture_moved.dxf
+
+          echo "== verify output exists and handle moved =="
+          python3 - <<'EOF'
+          import ezdxf
+          a = ezdxf.readfile("/tmp/fixture.dxf")
+          b = ezdxf.readfile("/tmp/fixture_moved.dxf")
+          ha = [e for e in a.modelspace() if e.dxftype()=="LINE"][0]
+          hb = [e for e in b.modelspace() if e.dxftype()=="LINE"][0]
+          dx = hb.dxf.start.x - ha.dxf.start.x
+          print(f"dx = {dx:.1f}")
+          assert abs(dx - 500.0) < 0.01, "wall did not move 500mm!"
+          print("SMOKE OK ✅ wall moved exactly 500mm")
+          EOF
+
+      - name: Smoke test — pytest（镜像内置测试）
+        run: |
+          docker run --rm ${{ env.FLOORPLAN_IMAGE }}:${{ github.ref_name }} \
+            /opt/FreeCAD/usr/bin/python -m pytest /opt/aicad/tools/core/test_core_api.py -q
+
+      # ─── 4. push ghcr.io（冒烟全绿才推）───
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push floorplan-mcp
+        run: |
+          docker push ${{ env.FLOORPLAN_IMAGE }}:${{ github.ref_name }}
+          docker push ${{ env.FLOORPLAN_IMAGE }}:latest
+
+      - name: Push libredwg-cli
+        run: |
+          docker push ${{ env.LIBREDWG_IMAGE }}:${{ github.ref_name }}
+          docker push ${{ env.LIBREDWG_IMAGE }}:latest
+
+      # ─── 5. 附产物到 GitHub Release（离线安装用 tar）───
+      - name: Save offline tar
+        run: |
+          mkdir -p dist
+          docker save ${{ env.FLOORPLAN_IMAGE }}:${{ github.ref_name }} -o dist/floorplan-mcp-${{ github.ref_name }}.tar
+          docker save ${{ env.LIBREDWG_IMAGE }}:${{ github.ref_name }} -o dist/libredwg-cli-${{ github.ref_name }}.tar
+          # 压缩可省 40% 体积（tar 里 FreeCAD AppImage 已是压缩过的，收益小但聊胜于无）
+          gzip dist/*.tar
+
+      - name: Create GitHub Release with artifacts
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: dist/*

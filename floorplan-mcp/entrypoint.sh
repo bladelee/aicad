@@ -11,6 +11,18 @@
 
 set -e
 
+# ── C4-δ：透传 CLI 子命令 ──
+# 兼容两种形态：
+#   docker run floorplan-mcp move-wall ...          （推荐，直接子命令）
+#   docker run floorplan-mcp floorplan move-wall ... （容错，重复前缀自动去掉）
+# docker run floorplan-mcp （无参数/serve）→ 保持原 MCP 常驻行为
+if [ "$#" -gt 0 ] && [ "$1" != "serve" ]; then
+    if [ "$1" = "floorplan" ]; then
+        shift
+    fi
+    exec floorplan "$@"
+fi
+
 TOOLS_DIR="${HOME}/.config/FreeCAD/FreeCADAI/tools"
 mkdir -p "${TOOLS_DIR}"
 
