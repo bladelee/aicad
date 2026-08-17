@@ -47,6 +47,29 @@ Goose → Settings → Extensions → Add MCP Server → Advanced/JSON，粘贴�
 
 AI 会调用 `user_move_wall`，输出 JSON 里 `output` 字段就是改后的 DXF 路径（服务器 `/data` 即共享盘 `~/dwgs`）。
 
+### 命令行验证（IT 用，不起 Goose）
+
+```bash
+# 鉴权三连：应得 401 / 401 / endpoint 事件
+curl -s -o /dev/null -w "%{http_code}\n" http://<ip>:3000/sse
+curl -s -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer 错的" http://<ip>:3000/sse
+curl -s -N --max-time 4 -H "Authorization: Bearer <TOKEN>" http://<ip>:3000/sse | head -2
+
+# 完整协议链路（容器内复用 freecad-ai client）
+docker exec <容器> /opt/FreeCAD/usr/bin/python -c "
+import sys; sys.path.insert(0, '/opt/freecad-ai')
+from freecad_ai.mcp.client import MCPClient
+from freecad_ai.mcp.transport import SSEClientTransport
+# 注意（2026-08-17 实测）：headers 必须传给 transport，不是 MCPClient；
+# 且 c.tools 是 property 不是方法
+tr = SSEClientTransport('http://localhost:3000/sse', headers={'Authorization': 'Bearer <TOKEN>'})
+c = MCPClient('verify', transport=tr); c.connect()
+ours = [t.name for t in c.tools if t.name.startswith('user_')]
+print(len(c.tools), len(ours)); assert len(ours) == 11
+print('OK - 11 个装修工具远程可见')
+"
+```
+
 ## 安全说明
 
 - **Bearer Token 必配**：不带 token 的请求 → 401（服务器拒绝裸奔部署，`FLOORPLAN_AUTH_TOKEN` 未设置时容器直接拒绝启动）
