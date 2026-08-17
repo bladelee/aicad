@@ -29,7 +29,7 @@ _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
-__version__ = "0.1.0"
+__version__ = "0.3.0"
 
 
 def _load_subcommand(module_name: str):
